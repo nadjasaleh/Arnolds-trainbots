@@ -88,6 +88,7 @@ def build_grounded_prompt(user_query: str, retrieved_docs: list[dict]) -> list[d
         "If the user is self-pitying, respond ruthlessly but not hateful.\n"
         "Keep answers practical and safe.\n"
         "Do not mention chunk IDs unless explicitly asked.\n"
+    
 
        
     "GUARDRAILS:"
