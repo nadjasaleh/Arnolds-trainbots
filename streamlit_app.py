@@ -135,7 +135,7 @@ def stream_answer(messages: list[dict]):
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="Shreddinator", page_icon=":muscle:")
 st.title(":muscle: Shreddinator")
-st.caption("Arnold-tyylinen fitness-chatbotti (CosmosDB RAG + streaming)")
+st.caption("Remember: Everybody pities the weak!")
 
 # init chat history
 if "messages" not in st.session_state:
