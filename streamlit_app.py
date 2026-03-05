@@ -156,23 +156,31 @@ if user_query:
     with st.chat_message("user"):
         st.markdown(user_query)
 
-    
-    # 2. Arnold's Thinking Process (Retrieval)
+    # retrieval
+    top_docs = retrieve_top_k(user_query, k=5) # Increased k to ensure we catch GIFs
+
+    # Extract GIF URL from retrieved docs if it matches the pattern from RAG.py
+    # Pattern: "GIF: title | Intent: intent | URL: url"
+    found_gif = None
+    for d in top_docs:
+        if "URL: https://media.giphy.com" in d['text']:
+            found_gif = d['text'].split("URL: ")[-1].strip()
+            break
+
+    # sidebar debug: what was retrieved from Cosmos
+    with st.sidebar:
+        st.subheader("DEBUG: Cosmos retrieved")
+        for d in top_docs:
+            preview = d["text"][:180].replace("\n", " ")
+            st.write(f"**{d['id']}** (score={d['score']:.4f})")
+            st.caption(preview + "…")
+
+    # build prompt
+    messages = build_grounded_prompt(user_query, top_docs)
+
+    # stream assistant response into UI
     with st.chat_message("assistant"):
-        with st.status("Arnold's lifting...", expanded=False) as status:
-            # We use retrieve_top_k from your existing functions
-            top_docs = retrieve_top_k(user_query, k=5) 
-            
-            # Extract GIF URL from retrieved docs logic
-            found_gif = None
-            for d in top_docs:
-                if "URL: https://media.giphy.com" in d['text']:
-                    found_gif = d['text'].split("URL: ")[-1].strip()
-                    break
-            
-            status.update(label="I found the secret sauce!", state="complete")
-        
-        # Show the GIF immediately if found
+        # Show the GIF immediately for visual impact
         if found_gif:
             st.image(found_gif)
 
