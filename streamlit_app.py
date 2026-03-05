@@ -135,7 +135,7 @@ def stream_answer(messages: list[dict]):
 # ---------- Streamlit UI ----------
 st.set_page_config(page_title="Shreddinator", page_icon=":muscle:")
 st.title(":muscle: Shreddinator")
-st.caption("Arnold-tyylinen fitness-chatbotti (CosmosDB RAG + streaming)")
+st.caption("Remember: Everybody pities the weak!")
 
 # init chat history
 if "messages" not in st.session_state:
@@ -151,49 +151,47 @@ for m in st.session_state.messages:
 user_query = st.chat_input("Ask me about training, nutrition, recovery...")
 
 if user_query:
-    # show user message
+    # 1. show user message
     st.session_state.messages.append({"role": "user", "content": user_query})
     with st.chat_message("user"):
         st.markdown(user_query)
 
-    # retrieval
-    top_docs = retrieve_top_k(user_query, k=5) # Increased k to ensure we catch GIFs
-
-    # Extract GIF URL from retrieved docs if it matches the pattern from RAG.py
-    # Pattern: "GIF: title | Intent: intent | URL: url"
-    found_gif = None
-    for d in top_docs:
-        if "URL: https://media.giphy.com" in d['text']:
-            found_gif = d['text'].split("URL: ")[-1].strip()
-            break
-
-    # sidebar debug: what was retrieved from Cosmos
-    with st.sidebar:
-        st.subheader("DEBUG: Cosmos retrieved")
-        for d in top_docs:
-            preview = d["text"][:180].replace("\n", " ")
-            st.write(f"**{d['id']}** (score={d['score']:.4f})")
-            st.caption(preview + "…")
-
-    # build prompt
-    messages = build_grounded_prompt(user_query, top_docs)
-
-    # stream assistant response into UI
+    
+    # 2. Arnold's Thinking Process (Retrieval)
     with st.chat_message("assistant"):
-        # Show the GIF immediately for visual impact
+        with st.status("Arnold's lifting...", expanded=False) as status:
+            #  retrieve_top_k from your existing functions
+            top_docs = retrieve_top_k(user_query, k=5) 
+            
+            # Extract GIF URL from retrieved docs logic
+            found_gif = None
+            for d in top_docs:
+                if "URL: https://media.giphy.com" in d['text']:
+                    found_gif = d['text'].split("URL: ")[-1].strip()
+                    break
+            
+            status.update(label="I found the secret sauce!", state="complete")
+        
+        # Show the GIF immediately if found
         if found_gif:
             st.image(found_gif)
-            
+
+        # 3. Build prompt and Stream Response
+        messages = build_grounded_prompt(user_query, top_docs)
+        
         placeholder = st.empty()
         full = ""
 
+        # Use your stream_answer generator
         for token in stream_answer(messages):
             full += token
-            placeholder.markdown(full)
+            placeholder.markdown(full + "▌")
+        
+        placeholder.markdown(full)
+    # --- INSERT END ---
 
-    # Save to history including the GIF URL
+    # 4. Save to history
     history_entry = {"role": "assistant", "content": full}
     if found_gif:
         history_entry["gif"] = found_gif
-        
     st.session_state.messages.append(history_entry)
