@@ -1,2 +1,7 @@
 streamlit
+python-dotenv
 openai
+azure-cosmos
+azure-core
+azure-ai-contentunderstanding
+langchain-text-splitters

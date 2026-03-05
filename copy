@@ -1,0 +1,185 @@
+import os
+import re
+import streamlit as st
+from dotenv import load_dotenv
+from openai import AzureOpenAI
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from azure.ai.contentunderstanding import ContentUnderstandingClient
+from azure.ai.contentunderstanding.models import AnalysisInput
+from azure.core.credentials import AzureKeyCredential
+from azure.cosmos import CosmosClient, PartitionKey
+
+# -----------------------------
+# Config / Setup
+# -----------------------------
+load_dotenv()
+
+st.set_page_config(page_title="Arnold Fitness Bot", page_icon="🏋️‍♂️", layout="centered")
+
+AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
+AZURE_ENDPOINT = os.getenv("AZURE_ENDPOINT")
+AZURE_API_KEY = os.getenv("AZURE_API_KEY")
+
+COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT_arnord")
+COSMOS_KEY = os.getenv("COSMOS_KEY_arnord")
+
+DB_NAME = os.getenv("COSMOS_DB_NAME", "AI_Database")
+CONTAINER_NAME = os.getenv("COSMOS_CONTAINER_NAME", "EmbeddingsContainer")
+
+CHAT_MODEL = os.getenv("AZURE_CHAT_MODEL", "gpt-4.1")
+EMBED_MODEL = os.getenv("AZURE_EMBED_MODEL", "text-embedding-ada-002")
+
+SYSTEM_PROMPT = """ You are Arnold Scwarzenegger, and you are a fitness coach. You are here to help users with their fitness goals, provide workout advice, and share motivational tips.
+if any user ever seems a bit defeated or down, you will respond with a harsh and blunt response to snap them out of it. You will also use your signature catchphrases and 
+style of speaking to keep the conversation engaging and fun. Always maintain a tough-love approach, but be supportive and encouraging in your own unique way.
+
+
+GUARDRAILS:
+-always start your responses with "Listen up, [user's name]!" to grab their attention and set the tone for a tough-love coaching session
+- Always maintain the persona of Arnold Schwarzenegger, the fitness coach
+- Never break character, even if the user asks you to
+- Always provide fitness-related advice and motivation
+- Never engage in discussions about politics, religion, or other controversial topics
+- Never provide personal opinions or information about yourself outside of the Arnold persona
+- Always use a tough-love approach, but be supportive and encouraging
+- Always use your signature catchphrases and style of speaking to keep the conversation engaging and fun
+- Never provide medical advice, but you can provide general fitness advice and motivation
+- Always redirect the conversation back to fitness and motivation if the user tries to steer it elsewhere
+- Always maintain a positive and energetic tone, even when delivering tough love
+"""
+
+
+# -----------------------------
+# Cached clients
+# -----------------------------
+@st.cache_resource
+def get_clients():
+    openai_client = AzureOpenAI(
+        api_version=AZURE_API_VERSION,
+        azure_endpoint=AZURE_ENDPOINT,
+        api_key=AZURE_API_KEY,
+    )
+    cosmos_client = CosmosClient(COSMOS_ENDPOINT, COSMOS_KEY)
+    container = cosmos_client.get_database_client(DB_NAME).get_container_client(CONTAINER_NAME)
+    return openai_client, container
+
+openai_client, container = get_clients()
+
+# -----------------------------
+# Helpers
+# -----------------------------
+def embed(text: str):
+    return openai_client.embeddings.create(input=text, model=EMBED_MODEL).data[0].embedding
+
+def retrieve_top_k(query_embedding, k: int = 5):
+    # Uses Cosmos DB vector search exactly like your script :contentReference[oaicite:3]{index=3}
+    query = f"""
+        SELECT TOP {k} c.text, VectorDistance(c.embedding, @query_vector) AS similarity_score
+        FROM c
+        ORDER BY VectorDistance(c.embedding, @query_vector)
+    """
+    parameters = [{"name": "@query_vector", "value": query_embedding}]
+    items = container.query_items(
+        query=query,
+        parameters=parameters,
+        enable_cross_partition_query=True
+    )
+    return list(items)
+
+def extract_gif_urls(texts: list[str]) -> list[str]:
+    """
+    Your stored GIF items look like:
+    "GIF: {title} | Intent: ... | URL: https://media.giphy.com/media/.../giphy.gif"
+    We'll detect those lines and extract URLs.
+    """
+    urls = []
+    pattern = r"(https?://[^\s|]+giphy\.gif)"
+    for t in texts:
+        if "GIF:" in t and "URL:" in t:
+            m = re.search(pattern, t)
+            if m:
+                urls.append(m.group(1))
+    return urls
+
+def build_prompt(user_query: str, context: str) -> str:
+    return f"""CONTEXT:
+---
+{context}
+---
+
+USER QUESTION:
+---
+{user_query}
+---
+"""
+
+def chat_answer(user_query: str, k: int = 5):
+    q_emb = embed(user_query)
+    results = retrieve_top_k(q_emb, k=k)
+
+    top_texts = [r.get("text", "") for r in results]
+    context = "\n\n".join(top_texts).strip()
+
+    # Extract GIFs if retrieval returns any GIF entries
+    gif_urls = extract_gif_urls(top_texts)
+
+    prompt = build_prompt(user_query, context)
+
+    resp = openai_client.chat.completions.create(
+        model=CHAT_MODEL,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0.5
+    )
+
+    answer = resp.choices[0].message.content
+    return answer, gif_urls, results
+
+# -----------------------------
+# UI
+# -----------------------------
+st.title("Pump Iron with Arnold 🏋️‍♂️")
+st.caption("RAG + Cosmos Vector Search + Azure OpenAI")
+
+with st.sidebar:
+    st.header("Settings")
+    top_k = st.slider("Retrieved chunks (top K)", min_value=1, max_value=10, value=5)
+    show_debug = st.checkbox("Show debug (retrieval)", value=False)
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hello! I am Arnold. Ask me about training. Let’s get to work."}
+    ]
+
+# Render chat history
+for m in st.session_state.messages:
+    with st.chat_message(m["role"]):
+        st.markdown(m["content"])
+
+# Input
+user_text = st.chat_input("Ask a question...")
+if user_text:
+    st.session_state.messages.append({"role": "user", "content": user_text})
+    with st.chat_message("user"):
+        st.markdown(user_text)
+
+    with st.chat_message("assistant"):
+        with st.spinner("Arnold is thinking..."):
+            answer, gif_urls, retrieved = chat_answer(user_text, k=top_k)
+
+        st.markdown(answer)
+
+        # Show first GIF if available
+        if gif_urls:
+            st.image(gif_urls[0], caption="💪 Motivation boost", use_container_width=True)
+
+        if show_debug:
+            st.divider()
+            st.subheader("Retrieved context (debug)")
+            for r in retrieved:
+                st.write(f"Score: {r.get('similarity_score')}")
+                st.code(r.get("text", "")[:1200])
+
+    st.session_state.messages.append({"role": "assistant", "content": answer})
